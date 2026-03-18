@@ -16,7 +16,7 @@ func main() {
 	defer cancel()
 
 	binDir := filepath.Join(".", "bin")
-	adbManager := adb.New(binDir)
+	adbManager := adb.NewManager(binDir)
 
 	// ── List devices ─────────────────────────────────────────────────────────
 	devices, err := adbManager.ListDevices(ctx)
@@ -107,4 +107,11 @@ loop:
 	}
 
 	fmt.Printf("\nDone. Captured %d frame(s).\n", count)
+}
+
+func test() {
+	ctx := context.Background()
+	md := adb.NewSystemManager(adb.NewManager("./bin/platform-tools"))
+	isOk, _ := md.FileExists(ctx, "emulator-5554", "/system/bin/minicap")
+	fmt.Printf("File exists: %v\n", isOk)
 }

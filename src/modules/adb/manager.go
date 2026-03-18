@@ -23,7 +23,7 @@ type Manager struct {
 	Fetcher *resource.Fetcher
 }
 
-func New(binDir string) *Manager {
+func NewManager(binDir string) *Manager {
 	return &Manager{
 		BinDir:  binDir,
 		Fetcher: resource.NewFetcher(),

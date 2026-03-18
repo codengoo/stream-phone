@@ -99,6 +99,8 @@ func (m *Manager) Setup(ctx context.Context, serial string) error {
 	}
 
 	binLocal, soLocal, err := m.ensureBinaries(ctx, apiInt, abi)
+	fmt.Println(binLocal)
+	fmt.Println(soLocal)
 	if err != nil {
 		return fmt.Errorf("ensure binaries: %w", err)
 	}
