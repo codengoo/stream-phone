@@ -1,12 +1,9 @@
 package adb
 
 import (
-	"archive/zip"
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -50,13 +47,11 @@ func (m *Manager) EnsureADB(ctx context.Context) (string, error) {
 		return "", fmt.Errorf("create bin dir: %w", err)
 	}
 
-	archiveData, err := m.Fetcher.Download(ctx, downloadURL)
-	if err != nil {
+	archivePath := filepath.Join(m.BinDir, "platform-tools.zip")
+	if err := m.Fetcher.Download(ctx, downloadURL, archivePath, resource.DownloadOptions{
+		Extract: true,
+	}); err != nil {
 		return "", fmt.Errorf("download platform-tools: %w", err)
-	}
-
-	if err := extractADB(ctx, m.Fetcher, bytes.NewReader(archiveData), int64(len(archiveData)), m.BinDir); err != nil {
-		return "", err
 	}
 
 	if _, err := os.Stat(adbPath); err != nil {
@@ -86,7 +81,7 @@ func (m *Manager) adbPath() string {
 	if runtime.GOOS == "windows" {
 		fileName += ".exe"
 	}
-	return filepath.Join(m.BinDir, fileName)
+	return filepath.Join(m.BinDir, "platform-tools", fileName)
 }
 
 func platformToolsURL() (string, error) {
@@ -100,66 +95,6 @@ func platformToolsURL() (string, error) {
 	default:
 		return "", fmt.Errorf("unsupported OS: %s", runtime.GOOS)
 	}
-}
-
-func extractADB(ctx context.Context, fetcher *resource.Fetcher, readerAt io.ReaderAt, size int64, binDir string) error {
-	zr, err := zip.NewReader(readerAt, size)
-	if err != nil {
-		return fmt.Errorf("open platform-tools archive: %w", err)
-	}
-
-	extracted := false
-	for _, file := range zr.File {
-		name := filepath.Base(file.Name)
-		if !isADBArtifact(name) {
-			continue
-		}
-
-		if err := extractZipFile(ctx, fetcher, file, filepath.Join(binDir, name)); err != nil {
-			return err
-		}
-		extracted = true
-	}
-
-	if !extracted {
-		return errors.New("adb files were not found in platform-tools archive")
-	}
-
-	return nil
-}
-
-func isADBArtifact(name string) bool {
-	switch name {
-	case "adb", "adb.exe", "AdbWinApi.dll", "AdbWinUsbApi.dll":
-		return true
-	default:
-		return false
-	}
-}
-
-func extractZipFile(ctx context.Context, fetcher *resource.Fetcher, file *zip.File, destination string) error {
-	src, err := file.Open()
-	if err != nil {
-		return fmt.Errorf("open archive entry %s: %w", file.Name, err)
-	}
-	defer src.Close()
-
-	content, err := io.ReadAll(src)
-	if err != nil {
-		return fmt.Errorf("read archive entry %s: %w", file.Name, err)
-	}
-
-	if err := fetcher.EnsureFile(ctx, destination, func(context.Context) ([]byte, error) {
-		return content, nil
-	}); err != nil {
-		return fmt.Errorf("extract %s: %w", destination, err)
-	}
-
-	if err := os.Chmod(destination, file.Mode()); err != nil {
-		return fmt.Errorf("chmod %s: %w", destination, err)
-	}
-
-	return nil
 }
 
 func parseDevices(output []byte) []Device {

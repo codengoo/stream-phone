@@ -1,13 +1,12 @@
 package main
 
 import (
+	"automation/src/modules/adb"
 	"context"
 	"fmt"
 	"log"
 	"path/filepath"
 	"time"
-
-	"automation/src/modules/adb"
 )
 
 func main() {
@@ -28,4 +27,5 @@ func main() {
 	for _, device := range devices {
 		fmt.Printf("%s\t%s\n", device.Serial, device.State)
 	}
+
 }
