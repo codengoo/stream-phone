@@ -77,6 +77,14 @@ func (m *Manager) ListDevices(ctx context.Context) ([]Device, error) {
 	return parseDevices(output), nil
 }
 
+func (m *Manager) ExecADB(ctx context.Context, args ...string) ([]byte, error) {
+	adbPath, err := m.EnsureADB(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return exec.CommandContext(ctx, adbPath, args...).Output()
+}
+
 func (m *Manager) adbPath() string {
 	fileName := "adb"
 	if runtime.GOOS == "windows" {

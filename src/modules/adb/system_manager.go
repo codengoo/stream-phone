@@ -30,24 +30,35 @@ func NewSystemManager(manager *Manager, serial string) *SystemManager {
 	return &SystemManager{Manager: manager, serial: serial}
 }
 
-// runADB resolves the adb binary and runs arbitrary adb arguments,
-// returning combined stdout+stderr output.
-func (m *SystemManager) runADB(ctx context.Context, args ...string) ([]byte, error) {
+// ShellCommand builds an `adb shell` command for the device.
+func (m *SystemManager) ShellCommand(ctx context.Context, args ...string) (*exec.Cmd, error) {
 	adbPath, err := m.EnsureADB(ctx)
 	if err != nil {
 		return nil, err
 	}
-	return exec.CommandContext(ctx, adbPath, args...).CombinedOutput()
+	cmdArgs := append([]string{"-s", m.serial, "shell"}, args...)
+	return exec.CommandContext(ctx, adbPath, cmdArgs...), nil
 }
 
-// execADB runs an adb command returning stdout only, without mixing stderr.
-// Use for binary output (e.g. exec-out) where stderr must not corrupt data.
-func (m *SystemManager) execADB(ctx context.Context, args ...string) ([]byte, error) {
-	adbPath, err := m.EnsureADB(ctx)
+// RunShell runs an `adb shell` command and returns its combined output.
+func (m *SystemManager) RunShell(ctx context.Context, args ...string) ([]byte, error) {
+	adbArgs := append([]string{"-s", m.serial, "shell"}, args...)
+	out, err := m.Manager.ExecADB(ctx, adbArgs...)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("adb shell %v: %w: %s", args, err, strings.TrimSpace(string(out)))
 	}
-	return exec.CommandContext(ctx, adbPath, args...).Output()
+	return out, nil
+}
+
+// ExecOut runs `adb exec-out args...` and returns stdout only.
+// Unlike RunShell, stderr is not mixed into the output — safe for binary data.
+func (m *SystemManager) ExecOut(ctx context.Context, args ...string) ([]byte, error) {
+	adbArgs := append([]string{"-s", m.serial, "exec-out"}, args...)
+	out, err := m.Manager.ExecADB(ctx, adbArgs...)
+	if err != nil {
+		return nil, fmt.Errorf("adb exec-out %v: %w", args, err)
+	}
+	return out, nil
 }
 
 // FileExists reports whether a regular file exists on the target device.
@@ -62,7 +73,7 @@ func (m *SystemManager) FileExists(ctx context.Context, remotePath string) (bool
 
 // PushFile copies a local file onto the device.
 func (m *SystemManager) PushFile(ctx context.Context, localPath, remotePath string) error {
-	out, err := m.runADB(ctx, "-s", m.serial, "push", localPath, remotePath)
+	out, err := m.Manager.ExecADB(ctx, "-s", m.serial, "push", localPath, remotePath)
 	if err != nil {
 		return fmt.Errorf("push %q -> %q: %w: %s", localPath, remotePath, err, strings.TrimSpace(string(out)))
 	}
@@ -74,47 +85,16 @@ func (m *SystemManager) PullFile(ctx context.Context, remotePath, localPath stri
 	if err := os.MkdirAll(filepath.Dir(localPath), 0o755); err != nil {
 		return fmt.Errorf("create local dir for %q: %w", localPath, err)
 	}
-	out, err := m.runADB(ctx, "-s", m.serial, "pull", remotePath, localPath)
+	out, err := m.Manager.ExecADB(ctx, "-s", m.serial, "pull", remotePath, localPath)
 	if err != nil {
 		return fmt.Errorf("pull %q -> %q: %w: %s", remotePath, localPath, err, strings.TrimSpace(string(out)))
 	}
 	return nil
 }
 
-// ShellCommand builds an `adb shell` command for the device.
-func (m *SystemManager) ShellCommand(ctx context.Context, args ...string) (*exec.Cmd, error) {
-	adbPath, err := m.EnsureADB(ctx)
-	if err != nil {
-		return nil, err
-	}
-	cmdArgs := append([]string{"-s", m.serial, "shell"}, args...)
-	return exec.CommandContext(ctx, adbPath, cmdArgs...), nil
-}
-
-// RunShell runs an `adb shell` command and returns its combined output.
-func (m *SystemManager) RunShell(ctx context.Context, args ...string) ([]byte, error) {
-	adbArgs := append([]string{"-s", m.serial, "shell"}, args...)
-	out, err := m.runADB(ctx, adbArgs...)
-	if err != nil {
-		return nil, fmt.Errorf("adb shell %v: %w: %s", args, err, strings.TrimSpace(string(out)))
-	}
-	return out, nil
-}
-
-// ExecOut runs `adb exec-out args...` and returns stdout only.
-// Unlike RunShell, stderr is not mixed into the output — safe for binary data.
-func (m *SystemManager) ExecOut(ctx context.Context, args ...string) ([]byte, error) {
-	adbArgs := append([]string{"-s", m.serial, "exec-out"}, args...)
-	out, err := m.execADB(ctx, adbArgs...)
-	if err != nil {
-		return nil, fmt.Errorf("adb exec-out %v: %w", args, err)
-	}
-	return out, nil
-}
-
 // Forward creates an adb port-forward rule: adb forward local remote.
 func (m *SystemManager) Forward(ctx context.Context, local, remote string) error {
-	out, err := m.runADB(ctx, "-s", m.serial, "forward", local, remote)
+	out, err := m.Manager.ExecADB(ctx, "-s", m.serial, "forward", local, remote)
 	if err != nil {
 		return fmt.Errorf("adb forward %s %s: %w: %s", local, remote, err, strings.TrimSpace(string(out)))
 	}
@@ -124,7 +104,7 @@ func (m *SystemManager) Forward(ctx context.Context, local, remote string) error
 // RemoveForward removes an adb port-forward rule. Errors are silently ignored
 // because this is typically called in a defer for cleanup.
 func (m *SystemManager) RemoveForward(ctx context.Context, local string) {
-	_, _ = m.runADB(ctx, "-s", m.serial, "forward", "--remove", local)
+	_, _ = m.Manager.ExecADB(ctx, "-s", m.serial, "forward", "--remove", local)
 }
 
 // DeviceProp returns an Android system property value from `getprop`.
@@ -138,7 +118,7 @@ func (m *SystemManager) DeviceProp(ctx context.Context, prop string) (string, er
 
 // ScreenSize returns the current display metrics (size and density) for the device.
 func (m *SystemManager) ScreenSize(ctx context.Context) (ScreenInfo, error) {
-	sizeOut, err := m.RunShell(ctx, "wm", "size")
+	sizeOut, err := m.RunShell(ctx, "wm", "sizes")
 	if err != nil {
 		return ScreenInfo{}, fmt.Errorf("wm size: %w", err)
 	}
