@@ -86,10 +86,7 @@ func (m *Manager) ExecADB(ctx context.Context, args ...string) ([]byte, error) {
 }
 
 func (m *Manager) adbPath() string {
-	fileName := "adb"
-	if runtime.GOOS == "windows" {
-		fileName += ".exe"
-	}
+	fileName := "adb.exe"
 	return filepath.Join(m.BinDir, "platform-tools", fileName)
 }
 

@@ -111,7 +111,7 @@ loop:
 
 func test() {
 	ctx := context.Background()
-	md := adb.NewSystemManager(adb.NewManager("./bin/platform-tools"), "emulator-5554")
+	md := adb.NewSystemManager(adb.NewManager("./bin"), "emulator-5554")
 	// isOk, _ := md.FileExists(ctx, "emulator-5554", "/system/bin/minicap")
 	info, err := md.ScreenSize(ctx)
 	if err != nil {
