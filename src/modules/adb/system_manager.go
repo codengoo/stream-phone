@@ -118,7 +118,7 @@ func (m *SystemManager) DeviceProp(ctx context.Context, prop string) (string, er
 
 // ScreenSize returns the current display metrics (size and density) for the device.
 func (m *SystemManager) ScreenSize(ctx context.Context) (ScreenInfo, error) {
-	sizeOut, err := m.RunShell(ctx, "wm", "sizes")
+	sizeOut, err := m.RunShell(ctx, "wm", "size")
 	if err != nil {
 		return ScreenInfo{}, fmt.Errorf("wm size: %w", err)
 	}
