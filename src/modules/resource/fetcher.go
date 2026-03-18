@@ -201,5 +201,7 @@ func fileMD5(path string) (string, error) {
 		return "", fmt.Errorf("hash %s: %w", path, err)
 	}
 
+	// fmt.Println(hex.EncodeToString(hash.Sum(nil)))
+
 	return hex.EncodeToString(hash.Sum(nil)), nil
 }

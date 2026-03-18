@@ -38,7 +38,7 @@ func (m *Manager) EnsureADB(ctx context.Context) (string, error) {
 		return "", fmt.Errorf("stat adb: %w", err)
 	}
 
-	downloadURL, err := platformToolsURL()
+	downloadURL, md5, err := platformToolsURL()
 	if err != nil {
 		return "", err
 	}
@@ -49,7 +49,8 @@ func (m *Manager) EnsureADB(ctx context.Context) (string, error) {
 
 	archivePath := filepath.Join(m.BinDir, "platform-tools.zip")
 	if err := m.Fetcher.Download(ctx, downloadURL, archivePath, resource.DownloadOptions{
-		Extract: true,
+		Extract:     true,
+		ExpectedMD5: md5,
 	}); err != nil {
 		return "", fmt.Errorf("download platform-tools: %w", err)
 	}
@@ -84,16 +85,16 @@ func (m *Manager) adbPath() string {
 	return filepath.Join(m.BinDir, "platform-tools", fileName)
 }
 
-func platformToolsURL() (string, error) {
+func platformToolsURL() (string, string, error) {
 	switch runtime.GOOS {
 	case "windows":
-		return "https://dl.google.com/android/repository/platform-tools-latest-windows.zip", nil
+		return "https://dl.google.com/android/repository/platform-tools-latest-windows.zip", "b7c0e7ab72862c07b1d429b78bb389c5", nil
 	case "linux":
-		return "https://dl.google.com/android/repository/platform-tools-latest-linux.zip", nil
+		return "https://dl.google.com/android/repository/platform-tools-latest-linux.zip", "", nil
 	case "darwin":
-		return "https://dl.google.com/android/repository/platform-tools-latest-darwin.zip", nil
+		return "https://dl.google.com/android/repository/platform-tools-latest-darwin.zip", "", nil
 	default:
-		return "", fmt.Errorf("unsupported OS: %s", runtime.GOOS)
+		return "", "", fmt.Errorf("unsupported OS: %s", runtime.GOOS)
 	}
 }
 
