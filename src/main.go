@@ -11,7 +11,7 @@ import (
 	"time"
 )
 
-func main() {
+func dosmt() {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
 
@@ -47,12 +47,12 @@ func main() {
 	}
 	fmt.Printf("\nUsing device: %s\n\n", serial)
 
-	mc := minicap.New(adbManager, filepath.Join(binDir, "minicap-cache"))
+	mc := minicap.New(adbManager, serial, filepath.Join(binDir, "minicap-cache"))
 
 	// ── Demo 1: Screenshot ───────────────────────────────────────────────────
 	fmt.Println("=== Screenshot demo ===")
 	screenshotPath := "screenshot.jpg"
-	if err := mc.Screenshot(ctx, serial, screenshotPath); err != nil {
+	if err := mc.Screenshot(ctx, screenshotPath); err != nil {
 		log.Printf("Screenshot failed: %v", err)
 	} else {
 		info, _ := os.Stat(screenshotPath)
@@ -66,7 +66,7 @@ func main() {
 
 	streamErr := make(chan error, 1)
 	go func() {
-		streamErr <- mc.Stream(streamCtx, serial, frames)
+		streamErr <- mc.Stream(streamCtx, frames)
 	}()
 
 	outDir := "frames"
@@ -111,7 +111,16 @@ loop:
 
 func test() {
 	ctx := context.Background()
-	md := adb.NewSystemManager(adb.NewManager("./bin/platform-tools"))
-	isOk, _ := md.FileExists(ctx, "emulator-5554", "/system/bin/minicap")
-	fmt.Printf("File exists: %v\n", isOk)
+	md := adb.NewSystemManager(adb.NewManager("./bin/platform-tools"), "emulator-5554")
+	// isOk, _ := md.FileExists(ctx, "emulator-5554", "/system/bin/minicap")
+	info, err := md.ScreenSize(ctx)
+	if err != nil {
+		fmt.Printf("Error getting screen size: %v\n", err)
+		return
+	}
+	fmt.Printf("Screen size: %dx%d density:%d\n", info.Width, info.Height, info.Density)
+}
+
+func main() {
+	test()
 }

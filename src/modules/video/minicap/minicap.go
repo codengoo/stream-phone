@@ -18,10 +18,8 @@ import (
 	"io"
 	"net"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strconv"
-	"strings"
 	"time"
 
 	"automation/src/modules/adb"
@@ -50,42 +48,45 @@ type Banner struct {
 	Quirks        uint8
 }
 
-// Manager wraps an ADB manager and provides minicap operations.
+// Manager wraps an ADB manager and provides minicap operations for a specific device.
 type Manager struct {
 	ADB      *adb.Manager
 	CacheDir string // local directory used to cache downloaded minicap binaries
+	serial   string
 	fetcher  *resource.Fetcher
+	system   *adb.SystemManager
 }
 
-// New creates a Manager. cacheDir is where downloaded binaries are stored
-// (e.g. "bin/minicap-cache").
-func New(adbManager *adb.Manager, cacheDir string) *Manager {
+// New creates a Manager for the given device. cacheDir is where downloaded
+// binaries are stored (e.g. "bin/minicap-cache").
+func New(adbManager *adb.Manager, serial, cacheDir string) *Manager {
 	return &Manager{
 		ADB:      adbManager,
 		CacheDir: cacheDir,
+		serial:   serial,
 		fetcher:  resource.NewFetcher(),
+		system:   adb.NewSystemManager(adbManager, serial),
 	}
 }
 
-// Setup downloads the minicap binary and shared library for the given device,
+// Setup downloads the minicap binary and shared library for the device,
 // then pushes them onto the device if they are not already present.
-func (m *Manager) Setup(ctx context.Context, serial string) error {
-	adbPath, err := m.ADB.EnsureADB(ctx)
-	if err != nil {
-		return err
-	}
-
+func (m *Manager) Setup(ctx context.Context) error {
 	// Skip push if binaries are already on the device.
-	if m.isOnDevice(ctx, adbPath, serial) {
+	onDevice, err := m.system.FileExists(ctx, deviceBin)
+	if err != nil {
+		return fmt.Errorf("check minicap on device: %w", err)
+	}
+	if onDevice {
 		return nil
 	}
 
-	api, err := m.deviceProp(ctx, adbPath, serial, "ro.build.version.sdk")
+	api, err := m.system.DeviceProp(ctx, "ro.build.version.sdk")
 	if err != nil {
 		return fmt.Errorf("get api level: %w", err)
 	}
 
-	abi, err := m.deviceProp(ctx, adbPath, serial, "ro.product.cpu.abi")
+	abi, err := m.system.DeviceProp(ctx, "ro.product.cpu.abi")
 	if err != nil {
 		return fmt.Errorf("get abi: %w", err)
 	}
@@ -99,53 +100,46 @@ func (m *Manager) Setup(ctx context.Context, serial string) error {
 	}
 
 	binLocal, soLocal, err := m.ensureBinaries(ctx, apiInt, abi)
-	fmt.Println(binLocal)
-	fmt.Println(soLocal)
 	if err != nil {
 		return fmt.Errorf("ensure binaries: %w", err)
 	}
 
-	if err := m.push(ctx, adbPath, serial, binLocal, deviceBin); err != nil {
+	if err := m.system.PushFile(ctx, binLocal, deviceBin); err != nil {
 		return fmt.Errorf("push minicap: %w", err)
 	}
-	if err := m.push(ctx, adbPath, serial, soLocal, deviceSO); err != nil {
+	if err := m.system.PushFile(ctx, soLocal, deviceSO); err != nil {
 		return fmt.Errorf("push minicap.so: %w", err)
 	}
 
 	// Make executable.
-	if err := m.shell(ctx, adbPath, serial, "chmod", "755", deviceBin); err != nil {
+	if _, err := m.system.RunShell(ctx, "chmod", "755", deviceBin); err != nil {
 		return fmt.Errorf("chmod minicap: %w", err)
 	}
 
 	return nil
 }
 
+// ScreenInfo returns the device display metrics (width, height, density).
+func (m *Manager) ScreenInfo(ctx context.Context) (adb.ScreenInfo, error) {
+	return m.system.ScreenSize(ctx)
+}
+
 // Screenshot captures a single JPEG frame from the device screen and writes it
 // to outputPath.
-func (m *Manager) Screenshot(ctx context.Context, serial, outputPath string) error {
-	if err := m.Setup(ctx, serial); err != nil {
+func (m *Manager) Screenshot(ctx context.Context, outputPath string) error {
+	if err := m.Setup(ctx); err != nil {
 		return fmt.Errorf("setup: %w", err)
 	}
 
-	adbPath, err := m.ADB.EnsureADB(ctx)
-	if err != nil {
-		return err
-	}
-
-	w, h, err := m.screenSize(ctx, adbPath, serial)
+	info, err := m.system.ScreenSize(ctx)
 	if err != nil {
 		return fmt.Errorf("screen size: %w", err)
 	}
 
-	proj := fmt.Sprintf("%dx%d@%dx%d/0", w, h, w, h)
-	cmd := exec.CommandContext(ctx, adbPath,
-		"-s", serial,
-		"exec-out",
-		"sh", "-c",
+	proj := fmt.Sprintf("%dx%d@%dx%d/0", info.Width, info.Height, info.Width, info.Height)
+	data, err := m.system.ExecOut(ctx, "sh", "-c",
 		fmt.Sprintf("LD_LIBRARY_PATH=/data/local/tmp /data/local/tmp/minicap -P %s -s", proj),
 	)
-
-	data, err := cmd.Output()
 	if err != nil {
 		return fmt.Errorf("run minicap screenshot: %w", err)
 	}
@@ -162,26 +156,24 @@ func (m *Manager) Screenshot(ctx context.Context, serial, outputPath string) err
 // Stream starts minicap in streaming mode and sends each JPEG frame to the
 // frames channel. Streaming runs until ctx is cancelled or an error occurs.
 // The caller must drain the frames channel.
-func (m *Manager) Stream(ctx context.Context, serial string, frames chan<- []byte) error {
-	if err := m.Setup(ctx, serial); err != nil {
+func (m *Manager) Stream(ctx context.Context, frames chan<- []byte) error {
+	if err := m.Setup(ctx); err != nil {
 		return fmt.Errorf("setup: %w", err)
 	}
 
-	adbPath, err := m.ADB.EnsureADB(ctx)
-	if err != nil {
-		return err
-	}
-
-	w, h, err := m.screenSize(ctx, adbPath, serial)
+	info, err := m.system.ScreenSize(ctx)
 	if err != nil {
 		return fmt.Errorf("screen size: %w", err)
 	}
 
-	proj := fmt.Sprintf("%dx%d@%dx%d/0", w, h, w, h)
+	proj := fmt.Sprintf("%dx%d@%dx%d/0", info.Width, info.Height, info.Width, info.Height)
 	shellCmd := fmt.Sprintf("LD_LIBRARY_PATH=/data/local/tmp /data/local/tmp/minicap -P %s 2>/dev/null", proj)
 
 	// Start minicap server on device.
-	serverCmd := exec.CommandContext(ctx, adbPath, "-s", serial, "shell", shellCmd)
+	serverCmd, err := m.system.ShellCommand(ctx, shellCmd)
+	if err != nil {
+		return fmt.Errorf("build minicap server command: %w", err)
+	}
 	if err := serverCmd.Start(); err != nil {
 		return fmt.Errorf("start minicap server: %w", err)
 	}
@@ -191,16 +183,11 @@ func (m *Manager) Stream(ctx context.Context, serial string, frames chan<- []byt
 	time.Sleep(600 * time.Millisecond)
 
 	// Forward the abstract Unix socket to a local TCP port.
-	fwdOut, err := exec.CommandContext(ctx, adbPath,
-		"-s", serial, "forward",
-		fmt.Sprintf("tcp:%d", streamPort),
-		"localabstract:minicap",
-	).CombinedOutput()
-	if err != nil {
-		return fmt.Errorf("adb forward: %w: %s", err, strings.TrimSpace(string(fwdOut)))
+	local := fmt.Sprintf("tcp:%d", streamPort)
+	if err := m.system.Forward(ctx, local, "localabstract:minicap"); err != nil {
+		return fmt.Errorf("adb forward: %w", err)
 	}
-	defer exec.Command(adbPath, "-s", serial, "forward", "--remove", //nolint:errcheck
-		fmt.Sprintf("tcp:%d", streamPort)).Run()
+	defer m.system.RemoveForward(context.Background(), local)
 
 	// Connect to the forwarded port.
 	conn, err := net.DialTimeout("tcp", fmt.Sprintf("127.0.0.1:%d", streamPort), 5*time.Second)
@@ -264,55 +251,6 @@ func readBanner(r io.Reader) (Banner, error) {
 	}, nil
 }
 
-func (m *Manager) isOnDevice(ctx context.Context, adbPath, serial string) bool {
-	cmd := exec.CommandContext(ctx, adbPath, "-s", serial, "shell",
-		fmt.Sprintf("test -f %s && echo yes", deviceBin))
-	out, err := cmd.Output()
-	return err == nil && strings.TrimSpace(string(out)) == "yes"
-}
-
-func (m *Manager) deviceProp(ctx context.Context, adbPath, serial, prop string) (string, error) {
-	out, err := exec.CommandContext(ctx, adbPath, "-s", serial, "shell", "getprop", prop).Output()
-	if err != nil {
-		return "", err
-	}
-	return strings.TrimSpace(string(out)), nil
-}
-
-func (m *Manager) screenSize(ctx context.Context, adbPath, serial string) (w, h int, err error) {
-	out, err := exec.CommandContext(ctx, adbPath, "-s", serial, "shell", "wm", "size").Output()
-	if err != nil {
-		return 0, 0, err
-	}
-	return parseSize(strings.TrimSpace(string(out)))
-}
-
-// parseSize parses `wm size` output. The last "WxH" token wins (handles
-// "Override size:" taking precedence over "Physical size:").
-func parseSize(output string) (w, h int, err error) {
-	w, h = -1, -1
-	for _, line := range strings.Split(output, "\n") {
-		idx := strings.Index(line, ":")
-		if idx < 0 {
-			continue
-		}
-		sizeStr := strings.TrimSpace(line[idx+1:])
-		parts := strings.SplitN(sizeStr, "x", 2)
-		if len(parts) != 2 {
-			continue
-		}
-		pw, e1 := strconv.Atoi(parts[0])
-		ph, e2 := strconv.Atoi(strings.TrimSpace(parts[1]))
-		if e1 == nil && e2 == nil {
-			w, h = pw, ph
-		}
-	}
-	if w < 0 {
-		return 0, 0, fmt.Errorf("could not parse screen size from %q", output)
-	}
-	return w, h, nil
-}
-
 func (m *Manager) ensureBinaries(ctx context.Context, api int, abi string) (binPath, soPath string, err error) {
 	dir := filepath.Join(m.CacheDir, fmt.Sprintf("android-%d", api), abi)
 	binPath = filepath.Join(dir, "minicap")
@@ -340,23 +278,6 @@ func (m *Manager) ensureBinaries(ctx context.Context, api int, abi string) (binP
 	}
 
 	return binPath, soPath, nil
-}
-
-func (m *Manager) push(ctx context.Context, adbPath, serial, local, remote string) error {
-	out, err := exec.CommandContext(ctx, adbPath, "-s", serial, "push", local, remote).CombinedOutput()
-	if err != nil {
-		return fmt.Errorf("%w: %s", err, strings.TrimSpace(string(out)))
-	}
-	return nil
-}
-
-func (m *Manager) shell(ctx context.Context, adbPath, serial string, args ...string) error {
-	cmdArgs := append([]string{"-s", serial, "shell"}, args...)
-	out, err := exec.CommandContext(ctx, adbPath, cmdArgs...).CombinedOutput()
-	if err != nil {
-		return fmt.Errorf("%w: %s", err, strings.TrimSpace(string(out)))
-	}
-	return nil
 }
 
 func statOK(path string) bool {
