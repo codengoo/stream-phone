@@ -147,7 +147,7 @@ func (m *SystemManager) ScreenSize(ctx context.Context) (ScreenInfo, error) {
 	// Lấy thông tin DisplayDeviceInfo (chứa size, density) và Orientation
 	combinedCmd := "dumpsys display | grep -E 'DisplayDeviceInfo|mCurrentOrientation'"
 
-	out, err := m.RunShell(ctx, "sh", "-c", combinedCmd)
+	out, err := m.RunShell(ctx, combinedCmd)
 	if err != nil {
 		return ScreenInfo{}, err
 	}

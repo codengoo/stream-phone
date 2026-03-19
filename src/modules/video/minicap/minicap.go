@@ -96,7 +96,11 @@ func (m *Manager) Setup(ctx context.Context) error {
 		return fmt.Errorf("parse api level %q: %w", api, err)
 	}
 
-	if apiInt > maxAPI || apiInt < minAPI {
+	if apiInt > maxAPI {
+		apiInt = maxAPI
+	}
+
+	if apiInt < minAPI {
 		return fmt.Errorf("unsupported api level: %d (must be between %d and %d)", apiInt, minAPI, maxAPI)
 	}
 
@@ -145,14 +149,13 @@ func (m *Manager) Screenshot(ctx context.Context, outputPath string) error {
 	data, err := m.system.RunExecOut(ctx, "sh", "-c",
 		fmt.Sprintf("%s -P %s -s", cmd, proj),
 	)
-
 	if err != nil {
 		return fmt.Errorf("run minicap screenshot: %w", err)
 	}
 
 	start := bytes.Index(data, []byte{0xff, 0xd8})
 	if start == -1 {
-		return fmt.Errorf("không tìm thấy định dạng ảnh JPEG trong dữ liệu trả về")
+		fmt.Printf("Data error:\n%s", string(data))
 	}
 	actualImageData := data[start:]
 
