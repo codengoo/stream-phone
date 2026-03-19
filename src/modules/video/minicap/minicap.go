@@ -30,7 +30,8 @@ import (
 const (
 	deviceBin  = "/data/local/tmp/minicap"
 	deviceSO   = "/data/local/tmp/minicap.so"
-	cmd        = "LD_LIBRARY_PATH=/data/local/tmp /data/local/tmp/minicap -n 'ieccorp_minicap'"
+	socketName = "ieccorp_minicap"
+	cmd        = "LD_LIBRARY_PATH=/data/local/tmp /data/local/tmp/minicap -n '" + socketName + "'"
 	streamPort = 1717
 	bannerSize = 24
 	maxAPI     = 33
@@ -193,7 +194,8 @@ func (m *Manager) Stream(ctx context.Context, frames chan<- []byte) error {
 
 	// Forward the abstract Unix socket to a local TCP port.
 	local := fmt.Sprintf("tcp:%d", streamPort)
-	if err := m.system.Forward(ctx, local, "localabstract:minicap"); err != nil {
+	abstractSocket := "localabstract:" + socketName
+	if err := m.system.Forward(ctx, local, abstractSocket); err != nil {
 		return fmt.Errorf("adb forward: %w", err)
 	}
 	defer m.system.RemoveForward(context.Background(), local)
@@ -237,7 +239,6 @@ func (m *Manager) Stream(ctx context.Context, frames chan<- []byte) error {
 			return ctx.Err()
 		case frames <- frameData:
 		}
-		fmt.Printf("Received frame: %d bytes\n", len(frameData))
 	}
 }
 
