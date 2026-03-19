@@ -53,7 +53,7 @@ type Manager struct {
 	ADB      *adb.Manager
 	CacheDir string // local directory used to cache downloaded minicap binaries
 	serial   string
-	fetcher  *resource.Fetcher
+	fetcher  *resource.Downloader
 	system   *adb.SystemManager
 }
 
@@ -64,7 +64,7 @@ func New(adbManager *adb.Manager, serial, cacheDir string) *Manager {
 		ADB:      adbManager,
 		CacheDir: cacheDir,
 		serial:   serial,
-		fetcher:  resource.NewFetcher(),
+		fetcher:  resource.NewDownloader(),
 		system:   adb.NewSystemManager(adbManager, serial),
 	}
 }
@@ -137,7 +137,7 @@ func (m *Manager) Screenshot(ctx context.Context, outputPath string) error {
 	}
 
 	proj := fmt.Sprintf("%dx%d@%dx%d/0", info.Width, info.Height, info.Width, info.Height)
-	data, err := m.system.ExecOut(ctx, "sh", "-c",
+	data, err := m.system.RunExecOut(ctx, "sh", "-c",
 		fmt.Sprintf("LD_LIBRARY_PATH=/data/local/tmp /data/local/tmp/minicap -P %s -s", proj),
 	)
 	if err != nil {

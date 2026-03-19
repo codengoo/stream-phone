@@ -17,44 +17,50 @@ import (
 const DefaultDownloadTimeout = 2 * time.Minute
 
 type DownloadOptions struct {
-	ExpectedMD5 string
+	ExpectedMD5 *string
 	Extract     bool
-	ExtractDir  string
 }
 
-type Fetcher struct {
+type Downloader struct {
 	HTTPClient *http.Client
 }
 
-func NewFetcher() *Fetcher {
-	return &Fetcher{
+func NewDownloader() *Downloader {
+	return &Downloader{
 		HTTPClient: &http.Client{
 			Timeout: DefaultDownloadTimeout,
 		},
 	}
 }
 
-func (f *Fetcher) Download(ctx context.Context, url string, savePath string, options DownloadOptions) error {
+// Download tải file từ URL, lưu vào savePath, kiểm tra MD5 nếu có, và giải nén nếu cần.
+func (f *Downloader) Download(ctx context.Context, url string, savePath string, options DownloadOptions) error {
+	// 1. Chuẩn bị thư mục lưu trữ
 	if err := os.MkdirAll(filepath.Dir(savePath), 0o755); err != nil {
 		return fmt.Errorf("create directory for %s: %w", savePath, err)
 	}
 
+	// 2. Tải file về
 	if err := f.downloadToFile(ctx, url, savePath); err != nil {
 		return err
 	}
 
-	if options.ExpectedMD5 != "" {
-		match, err := hasExpectedMD5(savePath, options.ExpectedMD5)
+	// 3. Kiểm tra MD5 (Chỉ thực hiện nếu ExpectedMD5 != nil)
+	if options.ExpectedMD5 != nil {
+		match, err := verifyFileMD5(savePath, *options.ExpectedMD5)
 		if err != nil {
-			return err
+			return fmt.Errorf("md5 verification error: %w", err)
 		}
 		if !match {
-			return fmt.Errorf("md5 mismatch after download for %s", savePath)
+			// Tùy chọn: Xóa file lỗi để tránh rác
+			_ = os.Remove(savePath)
+			return fmt.Errorf("md5 mismatch: expected %s", *options.ExpectedMD5)
 		}
 	}
 
+	// 4. Giải nén
 	if options.Extract {
-		if err := extractArchive(savePath, resolveExtractDir(savePath, options.ExtractDir)); err != nil {
+		if err := extractArchive(savePath, filepath.Dir(savePath)); err != nil {
 			return err
 		}
 	}
@@ -62,7 +68,7 @@ func (f *Fetcher) Download(ctx context.Context, url string, savePath string, opt
 	return nil
 }
 
-func (f *Fetcher) downloadToFile(ctx context.Context, url string, savePath string) error {
+func (f *Downloader) downloadToFile(ctx context.Context, url string, savePath string) error {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return fmt.Errorf("build download request: %w", err)
@@ -93,13 +99,6 @@ func (f *Fetcher) downloadToFile(ctx context.Context, url string, savePath strin
 	}
 
 	return nil
-}
-
-func resolveExtractDir(savePath string, extractDir string) string {
-	if extractDir != "" {
-		return extractDir
-	}
-	return filepath.Dir(savePath)
 }
 
 func extractArchive(archivePath string, destinationDir string) error {
@@ -180,7 +179,7 @@ func extractZipFile(file *zip.File, destinationDir string) error {
 	return nil
 }
 
-func hasExpectedMD5(path string, expectedMD5 string) (bool, error) {
+func verifyFileMD5(path string, expectedMD5 string) (bool, error) {
 	actualMD5, err := fileMD5(path)
 	if err != nil {
 		return false, err
