@@ -17,9 +17,11 @@ type DensityInfo struct {
 }
 
 type ScreenInfo struct {
-	Width   int
-	Height  int
-	Density DensityInfo
+	Width       int
+	Height      int
+	Orientation int
+	Rotation    int
+	Density     DensityInfo
 }
 
 // SystemManager wraps a Manager for a specific device, providing
@@ -159,7 +161,13 @@ func (m *SystemManager) ScreenSize(ctx context.Context) (ScreenInfo, error) {
 		return ScreenInfo{}, err
 	}
 
-	return ScreenInfo{Width: w, Height: h, Density: d}, nil
+	rotOut, err := m.RunShell(ctx, "sh", "-c", "dumpsys", "SurfaceFlinger")
+	if err != nil {
+		return ScreenInfo{}, fmt.Errorf("dumpsys display: %w", err)
+	}
+	orientation := parseOrientation(string(rotOut))
+
+	return ScreenInfo{Width: w, Height: h, Density: d, Orientation: orientation, Rotation: orientation * 90}, nil
 }
 
 func shellQuote(value string) string {
@@ -237,4 +245,16 @@ func parseWmDensity(output string) (DensityInfo, error) {
 	}
 
 	return info, nil
+}
+
+// parseOrientation parses the output of `dumpsys display` to find the current screen orientation.
+func parseOrientation(output string) int {
+	// Regex tìm "orientation=X" hoặc "mCurrentOrientation=X"
+	re := regexp.MustCompile(`orientation=(\d)`)
+	match := re.FindStringSubmatch(output)
+	if len(match) > 1 {
+		orientation, _ := strconv.Atoi(match[1])
+		return orientation
+	}
+	return 0 // Mặc định là 0 nếu không tìm thấy
 }

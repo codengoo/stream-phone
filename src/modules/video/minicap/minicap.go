@@ -166,6 +166,10 @@ func (m *Manager) Screenshot(ctx context.Context, outputPath string) error {
 // frames channel. Streaming runs until ctx is cancelled or an error occurs.
 // The caller must drain the frames channel.
 func (m *Manager) Stream(ctx context.Context, frames chan<- []byte) error {
+	// 1. Dọn dẹp sạch sẽ trước khi chạy
+	m.cleanupDevice(ctx)
+	defer m.cleanupDevice(context.Background())
+
 	// Ensure binaries are set up on the device.
 	if err := m.Setup(ctx); err != nil {
 		return fmt.Errorf("setup: %w", err)
@@ -244,6 +248,14 @@ func (m *Manager) Stream(ctx context.Context, frames chan<- []byte) error {
 }
 
 // ── helpers ──────────────────────────────────────────────────────────────────
+
+// Cleanup cũ giúp tránh lỗi "Address already in use" hoặc treo socket
+func (m *Manager) cleanupDevice(ctx context.Context) {
+	// Tìm và kill các tiến trình minicap đang chạy hoặc bị treo
+	// Sử dụng lệnh shell: ps -A | grep minicap (hoặc ps tùy bản Android)
+	script := `for pid in $(ps -A | grep minicap | awk '{print $2}'); do kill -9 $pid; done`
+	_, _ = m.system.RunShell(ctx, "sh", "-c", script)
+}
 
 func readBanner(r io.Reader) (Banner, error) {
 	buf := make([]byte, bannerSize)
