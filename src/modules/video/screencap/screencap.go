@@ -1,13 +1,13 @@
 // Package screencap provides screen capture and streaming using Android's
-// built-in screencap shell command. No additional binaries are required on
-// the device.
+// built-in screencap and screenrecord shell commands. No additional binaries
+// are required on the device.
 //
-// Screencap works by:
-//  1. For screenshots: running `adb exec-out screencap -p` to obtain a single
-//     PNG image direct from stdout.
-//  2. For streaming: running a continuous shell loop that emits back-to-back
-//     PNG images, then splitting the raw byte stream on PNG magic bytes to
-//     recover individual frames and forward them to the caller.
+// Operations:
+//  1. Screenshot: runs `adb exec-out screencap -p` to obtain a single PNG.
+//  2. Stream: runs `screenrecord --output-format=h264 /dev/stdout` via
+//     exec-out, forwarding the raw H.264 bitstream as byte chunks to the
+//     caller. screenrecord has a built-in 3-minute limit; the stream server's
+//     restart loop handles reconnection transparently.
 package screencap
 
 import (
@@ -43,8 +43,9 @@ func (m *Manager) ScreenInfo(ctx context.Context) (adb.ScreenInfo, error) {
 	return m.system.ScreenSize(ctx)
 }
 
-// FrameContentType returns the MIME type of frames produced by Stream.
-func (m *Manager) FrameContentType() string { return "image/png" }
+// FrameContentType returns the MIME type of data produced by Stream.
+// screenrecord emits a raw H.264 bitstream.
+func (m *Manager) FrameContentType() string { return "video/h264" }
 
 // Screenshot captures a single PNG frame from the device screen and writes
 // it to outputPath.
@@ -65,15 +66,18 @@ func (m *Manager) Screenshot(ctx context.Context, outputPath string) error {
 	return os.WriteFile(outputPath, data[start:], 0o644)
 }
 
-// Stream continuously captures frames using a shell screencap loop and sends
-// each PNG frame to the frames channel. Streaming runs until ctx is cancelled
-// or an unrecoverable error occurs. The caller must drain the frames channel.
+// Stream starts screenrecord in H.264 mode and forwards raw byte chunks to
+// the frames channel. Each chunk is a segment of the H.264 bitstream, not a
+// complete picture frame. Callers (e.g. the stream server) should concatenate
+// received chunks and pipe them to clients as a continuous byte stream.
+// Streaming runs until ctx is cancelled or screenrecord exits (built-in
+// 3-minute limit). The caller must drain the frames channel.
 func (m *Manager) Stream(ctx context.Context, frames chan<- []byte) error {
-	cmd, err := m.system.ExecOutCommand(ctx, "sh", "-c",
-		"while true; do screencap -p; sleep 0.1; done",
+	cmd, err := m.system.ExecOutCommand(ctx,
+		"screenrecord", "--output-format=h264", "/dev/stdout",
 	)
 	if err != nil {
-		return fmt.Errorf("build screencap stream command: %w", err)
+		return fmt.Errorf("build screenrecord command: %w", err)
 	}
 
 	pipe, err := cmd.StdoutPipe()
@@ -82,20 +86,18 @@ func (m *Manager) Stream(ctx context.Context, frames chan<- []byte) error {
 	}
 
 	if err := cmd.Start(); err != nil {
-		return fmt.Errorf("start screencap stream: %w", err)
+		return fmt.Errorf("start screenrecord: %w", err)
 	}
 	defer cmd.Wait() //nolint:errcheck
 
-	return streamPNGFrames(ctx, pipe, frames)
+	return pipeChunks(ctx, pipe, frames)
 }
 
-// streamPNGFrames reads a raw byte stream, splits it on PNG magic bytes, and
-// sends each complete frame to frames. A frame is considered complete when the
-// next PNG magic header is encountered in the stream.
-func streamPNGFrames(ctx context.Context, r io.Reader, frames chan<- []byte) error {
-	const readBuf = 512 * 1024 // 512 KB per read
-	var acc []byte
-	buf := make([]byte, readBuf)
+// pipeChunks reads r in fixed-size chunks and sends each to frames until
+// ctx is cancelled, an error occurs, or r reaches EOF.
+func pipeChunks(ctx context.Context, r io.Reader, frames chan<- []byte) error {
+	const chunkSize = 256 * 1024 // 256 KB
+	buf := make([]byte, chunkSize)
 
 	for {
 		if ctx.Err() != nil {
@@ -104,34 +106,12 @@ func streamPNGFrames(ctx context.Context, r io.Reader, frames chan<- []byte) err
 
 		n, readErr := r.Read(buf)
 		if n > 0 {
-			acc = append(acc, buf[:n]...)
-
-			for {
-				// Locate the start of the leading PNG in the buffer.
-				start := bytes.Index(acc, pngMagic)
-				if start == -1 {
-					acc = nil // No magic found; discard garbage bytes.
-					break
-				}
-				acc = acc[start:] // Trim any bytes before the PNG header.
-
-				// The next occurrence of the magic marks the boundary of
-				// the current frame.
-				next := bytes.Index(acc[len(pngMagic):], pngMagic)
-				if next == -1 {
-					break // Frame is incomplete; wait for more data.
-				}
-
-				frameEnd := next + len(pngMagic)
-				frame := make([]byte, frameEnd)
-				copy(frame, acc[:frameEnd])
-				acc = acc[frameEnd:]
-
-				select {
-				case <-ctx.Done():
-					return ctx.Err()
-				case frames <- frame:
-				}
+			chunk := make([]byte, n)
+			copy(chunk, buf[:n])
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case frames <- chunk:
 			}
 		}
 
@@ -139,7 +119,7 @@ func streamPNGFrames(ctx context.Context, r io.Reader, frames chan<- []byte) err
 			if errors.Is(readErr, io.EOF) {
 				return nil
 			}
-			return fmt.Errorf("read screencap stream: %w", readErr)
+			return fmt.Errorf("read screenrecord: %w", readErr)
 		}
 	}
 }

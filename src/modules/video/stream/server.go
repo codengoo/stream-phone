@@ -1,10 +1,15 @@
-// Package stream exposes a device's screen over HTTP so that an Electron
-// renderer (or any browser) can display it with a single <img> tag.
+// Package stream exposes a device's screen over HTTP.
+//
+// When the VideoSource produces image frames (FrameContentType returns
+// "image/*"), the /stream endpoint delivers a multipart MJPEG response
+// suitable for an <img> tag. When the source produces a video bitstream
+// (e.g. "video/h264" from screenrecord), /stream pipes raw bytes so clients
+// can consume it with a <video> tag or MediaSource API.
 //
 // Endpoints
 //
-//	GET /stream    — multipart MJPEG stream; use as <img src="http://HOST/stream">
-//	GET /snapshot  — single JPEG frame (latest captured)
+//	GET /stream    — MJPEG or raw video stream
+//	GET /snapshot  — latest captured frame (image sources only)
 //	GET /info      — JSON object with screen metrics
 //	GET /health    — "ok" liveness probe
 package stream
@@ -16,6 +21,7 @@ import (
 	"mime/multipart"
 	"net/http"
 	"net/textproto"
+	"strings"
 	"sync"
 
 	"automation/src/modules/adb"
@@ -157,8 +163,18 @@ func (s *Server) subscribe() (ch chan []byte, unsub func()) {
 	}
 }
 
-// handleStream writes an infinite multipart MJPEG response.
+// handleStream dispatches to MJPEG or raw-video delivery based on the
+// content type reported by the VideoSource.
 func (s *Server) handleStream(w http.ResponseWriter, r *http.Request) {
+	if strings.HasPrefix(s.src.FrameContentType(), "image/") {
+		s.handleMJPEGStream(w, r)
+	} else {
+		s.handleRawVideoStream(w, r)
+	}
+}
+
+// handleMJPEGStream writes an infinite multipart MJPEG response.
+func (s *Server) handleMJPEGStream(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "multipart/x-mixed-replace; boundary="+mjpegBoundary)
 	w.Header().Set("Cache-Control", "no-cache, no-store")
 	w.Header().Set("Access-Control-Allow-Origin", "*")
@@ -194,7 +210,35 @@ func (s *Server) handleStream(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// handleSnapshot returns the most recently captured JPEG frame.
+// handleRawVideoStream pipes raw byte chunks directly to the client.
+// Suitable for H.264 or other video bitstreams produced by screenrecord.
+func (s *Server) handleRawVideoStream(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", s.src.FrameContentType())
+	w.Header().Set("Cache-Control", "no-cache, no-store")
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+
+	ch, unsub := s.subscribe()
+	defer unsub()
+
+	for {
+		select {
+		case <-r.Context().Done():
+			return
+		case chunk, ok := <-ch:
+			if !ok {
+				return
+			}
+			if _, err := w.Write(chunk); err != nil {
+				return
+			}
+			if f, ok := w.(http.Flusher); ok {
+				f.Flush()
+			}
+		}
+	}
+}
+
+// handleSnapshot returns the most recently captured frame.
 func (s *Server) handleSnapshot(w http.ResponseWriter, _ *http.Request) {
 	s.mu.RLock()
 	frame := s.lastFrame
