@@ -11,6 +11,7 @@
 package minicap
 
 import (
+	"bytes"
 	"context"
 	"encoding/binary"
 	"errors"
@@ -56,6 +57,7 @@ type Manager struct {
 	serial  string
 	fetcher *resource.Downloader
 	system  *adb.SystemManager
+	cmd     string
 }
 
 // New creates a Manager for the given device. cacheDir is where downloaded
@@ -67,6 +69,7 @@ func New(adbManager *adb.Manager, serial, cacheDir string) *Manager {
 		serial:  serial,
 		fetcher: resource.NewDownloader(),
 		system:  adb.NewSystemManager(adbManager, serial),
+		cmd:     "LD_LIBRARY_PATH=/data/local/tmp /data/local/tmp/minicap -n 'ieccorp_minicap'",
 	}
 }
 
@@ -126,10 +129,12 @@ func (m *Manager) ScreenInfo(ctx context.Context) (adb.ScreenInfo, error) {
 // Screenshot captures a single JPEG frame from the device screen and writes it
 // to outputPath.
 func (m *Manager) Screenshot(ctx context.Context, outputPath string) error {
+	// Ensure binaries are set up on the device.
 	if err := m.Setup(ctx); err != nil {
 		return fmt.Errorf("setup: %w", err)
 	}
 
+	// Check screen size to determine the correct minicap parameters.
 	info, err := m.system.ScreenSize(ctx)
 	if err != nil {
 		return fmt.Errorf("screen size: %w", err)
@@ -137,19 +142,23 @@ func (m *Manager) Screenshot(ctx context.Context, outputPath string) error {
 
 	proj := fmt.Sprintf("%dx%d@%dx%d/0", info.Width, info.Height, info.Width, info.Height)
 	data, err := m.system.RunExecOut(ctx, "sh", "-c",
-		fmt.Sprintf("LD_LIBRARY_PATH=/data/local/tmp /data/local/tmp/minicap -P %s -s", proj),
+		fmt.Sprintf("%s -P %s -s", m.cmd, proj),
 	)
+
 	if err != nil {
 		return fmt.Errorf("run minicap screenshot: %w", err)
 	}
-	if len(data) == 0 {
-		return fmt.Errorf("minicap returned empty output – check device logs")
+
+	start := bytes.Index(data, []byte{0xff, 0xd8})
+	if start == -1 {
+		return fmt.Errorf("không tìm thấy định dạng ảnh JPEG trong dữ liệu trả về")
 	}
+	actualImageData := data[start:]
 
 	if err := os.MkdirAll(filepath.Dir(outputPath), 0o755); err != nil {
 		return err
 	}
-	return os.WriteFile(outputPath, data, 0o644)
+	return os.WriteFile(outputPath, actualImageData, 0o644)
 }
 
 // Stream starts minicap in streaming mode and sends each JPEG frame to the
@@ -166,7 +175,7 @@ func (m *Manager) Stream(ctx context.Context, frames chan<- []byte) error {
 	}
 
 	proj := fmt.Sprintf("%dx%d@%dx%d/0", info.Width, info.Height, info.Width, info.Height)
-	shellCmd := fmt.Sprintf("LD_LIBRARY_PATH=/data/local/tmp /data/local/tmp/minicap -P %s 2>/dev/null", proj)
+	shellCmd := fmt.Sprintf("%s -P %s 2>/dev/null", m.cmd, proj)
 
 	// Start minicap server on device.
 	serverCmd, err := m.system.ShellCommand(ctx, shellCmd)

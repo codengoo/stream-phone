@@ -113,7 +113,7 @@ func test() {
 	ctx := context.Background()
 	client := adb.NewManager("./bin/adb")
 	mnc := minicap.New(client, "emulator-5554", "./bin/minicap")
-	mnc.Screenshot(ctx, "test.jpg")
+	mnc.Screenshot(ctx, "out/test.jpg")
 
 	// b, _ := json.MarshalIndent(info, "", "  ")
 	// fmt.Println(string(b))
