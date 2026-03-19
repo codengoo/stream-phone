@@ -18,7 +18,7 @@ import (
 	"net/textproto"
 	"sync"
 
-	"automation/src/modules/video/minicap"
+	"automation/src/modules/adb"
 )
 
 const (
@@ -26,10 +26,19 @@ const (
 	mjpegBoundary = "mjpegframe"
 )
 
-// Server wraps a per-device minicap.Manager and broadcasts frames over HTTP.
-// A single minicap stream is shared among all connected clients.
+// VideoSource is the interface that a frame source must satisfy to be used
+// with Server. Both minicap.Manager and screencap.Manager implement this.
+type VideoSource interface {
+	Stream(ctx context.Context, frames chan<- []byte) error
+	Screenshot(ctx context.Context, outputPath string) error
+	ScreenInfo(ctx context.Context) (adb.ScreenInfo, error)
+	FrameContentType() string
+}
+
+// Server broadcasts frames from a VideoSource over HTTP.
+// A single capture stream is shared among all connected clients.
 type Server struct {
-	mc   *minicap.Manager
+	src  VideoSource
 	addr string
 
 	mu        sync.RWMutex
@@ -39,14 +48,14 @@ type Server struct {
 	httpSrv *http.Server
 }
 
-// New creates a streaming server for the given device.
+// New creates a streaming server backed by src.
 // addr is the listen address (e.g. ":9373"); pass "" to use the default.
-func New(mc *minicap.Manager, addr string) *Server {
+func New(src VideoSource, addr string) *Server {
 	if addr == "" {
 		addr = defaultAddr
 	}
 	return &Server{
-		mc:   mc,
+		src:  src,
 		addr: addr,
 		subs: make(map[chan []byte]struct{}),
 	}
@@ -98,14 +107,14 @@ func (s *Server) Addr() string { return s.addr }
 
 // ── internal helpers ──────────────────────────────────────────────────────────
 
-// runStream keeps minicap.Stream running for the lifetime of ctx,
+// runStream keeps the source Stream running for the lifetime of ctx,
 // restarting on non-context errors so transient device glitches self-heal.
 func (s *Server) runStream(ctx context.Context, frames chan<- []byte) {
 	for {
 		if ctx.Err() != nil {
 			return
 		}
-		_ = s.mc.Stream(ctx, frames)
+		_ = s.src.Stream(ctx, frames)
 		if ctx.Err() != nil {
 			return
 		}
@@ -169,7 +178,7 @@ func (s *Server) handleStream(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			hdr := make(textproto.MIMEHeader)
-			hdr.Set("Content-Type", "image/jpeg")
+			hdr.Set("Content-Type", s.src.FrameContentType())
 			hdr.Set("Content-Length", fmt.Sprintf("%d", len(frame)))
 			pw, err := mw.CreatePart(hdr)
 			if err != nil {
@@ -195,7 +204,7 @@ func (s *Server) handleSnapshot(w http.ResponseWriter, _ *http.Request) {
 		http.Error(w, "no frame available yet — stream may still be starting", http.StatusServiceUnavailable)
 		return
 	}
-	w.Header().Set("Content-Type", "image/jpeg")
+	w.Header().Set("Content-Type", s.src.FrameContentType())
 	w.Header().Set("Content-Length", fmt.Sprintf("%d", len(frame)))
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Access-Control-Allow-Origin", "*")
@@ -204,7 +213,7 @@ func (s *Server) handleSnapshot(w http.ResponseWriter, _ *http.Request) {
 
 // handleInfo returns the device screen metrics as JSON.
 func (s *Server) handleInfo(w http.ResponseWriter, r *http.Request) {
-	info, err := s.mc.ScreenInfo(r.Context())
+	info, err := s.src.ScreenInfo(r.Context())
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return

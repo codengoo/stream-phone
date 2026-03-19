@@ -47,6 +47,18 @@ func (m *SystemManager) ShellCommand(ctx context.Context, args ...string) (*exec
 	return exec.CommandContext(ctx, adbPath, cmdArgs...), nil
 }
 
+// ExecOutCommand builds an `adb exec-out` command for the device without
+// running it. The caller is responsible for starting the process and reading
+// its output, which is passed through raw (no line-ending translation).
+func (m *SystemManager) ExecOutCommand(ctx context.Context, args ...string) (*exec.Cmd, error) {
+	adbPath, err := m.EnsureADB(ctx)
+	if err != nil {
+		return nil, err
+	}
+	cmdArgs := append([]string{"-s", m.serial, "exec-out"}, args...)
+	return exec.CommandContext(ctx, adbPath, cmdArgs...), nil
+}
+
 func (m *SystemManager) RunOnDevice(ctx context.Context, args ...string) ([]byte, error) {
 	adbArgs := append([]string{"-s", m.serial}, args...)
 	out, err := m.Manager.ExecADB(ctx, adbArgs...)

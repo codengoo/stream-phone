@@ -2,25 +2,26 @@ package main
 
 import (
 	"automation/src/modules/adb"
-	"automation/src/modules/video/minicap"
+	"automation/src/modules/video/screencap"
 	"context"
-	"encoding/json"
-	"fmt"
 )
 
 func test() {
 	ctx := context.Background()
 	client := adb.NewManager("./bin/adb")
-	mnc := minicap.New(client, "emulator-5554", "./bin/minicap")
-	info, err := mnc.ScreenInfo(ctx)
+	// mnc := minicap.New(client, "emulator-5554", "./bin/minicap")
+	// info, err := mnc.ScreenInfo(ctx)
 	// fmt.Println("=== Device info demo ===")
-	// err := mnc.Screenshot(ctx, "out/test.jpg")
-	if err != nil {
-		fmt.Printf("Get screen info error: %v\n", err)
-		return
-	}
-	b, _ := json.MarshalIndent(info, "", "  ")
-	fmt.Println(string(b))
+	// // err := mnc.Screenshot(ctx, "out/test.jpg")
+	// if err != nil {
+	// 	fmt.Printf("Get screen info error: %v\n", err)
+	// 	return
+	// }
+	// b, _ := json.MarshalIndent(info, "", "  ")
+	// fmt.Println(string(b))
+
+	sc := screencap.New(client, "emulator-5554")
+	sc.Screenshot(ctx, "out/test.png")
 
 	// 	fmt.Println("\n=== Stream demo (10 frames) ===")
 	// 	streamCtx, streamCancel := context.WithCancel(ctx)

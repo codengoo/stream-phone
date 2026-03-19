@@ -62,6 +62,8 @@ type Manager struct {
 	system  *adb.SystemManager
 }
 
+var magicJpg = []byte{0xff, 0xd8}
+
 // New creates a Manager for the given device. cacheDir is where downloaded
 // binaries are stored (e.g. "bin/minicap-cache").
 func New(adbManager *adb.Manager, serial, cacheDir string) *Manager {
@@ -131,6 +133,9 @@ func (m *Manager) ScreenInfo(ctx context.Context) (adb.ScreenInfo, error) {
 	return m.system.ScreenSize(ctx)
 }
 
+// FrameContentType returns the MIME type of frames produced by Stream.
+func (m *Manager) FrameContentType() string { return "image/jpeg" }
+
 // Screenshot captures a single JPEG frame from the device screen and writes it
 // to outputPath.
 func (m *Manager) Screenshot(ctx context.Context, outputPath string) error {
@@ -153,7 +158,7 @@ func (m *Manager) Screenshot(ctx context.Context, outputPath string) error {
 		return fmt.Errorf("run minicap screenshot: %w", err)
 	}
 
-	start := bytes.Index(data, []byte{0xff, 0xd8})
+	start := bytes.Index(data, magicJpg)
 	if start == -1 {
 		fmt.Printf("Data error:\n%s", string(data))
 	}
