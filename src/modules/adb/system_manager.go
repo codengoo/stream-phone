@@ -2,6 +2,7 @@ package adb
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os/exec"
 	"regexp"
@@ -143,118 +144,122 @@ func (m *SystemManager) DeviceProps(ctx context.Context) (map[string]string, err
 
 // ScreenSize returns the current display metrics (size and density) for the device.
 func (m *SystemManager) ScreenSize(ctx context.Context) (ScreenInfo, error) {
-	sizeOut, err := m.RunShell(ctx, "wm", "size")
-	if err != nil {
-		return ScreenInfo{}, fmt.Errorf("wm size: %w", err)
-	}
-	w, h, err := parseWmSize(strings.TrimSpace(string(sizeOut)))
+	// Lấy thông tin DisplayDeviceInfo (chứa size, density) và Orientation
+	combinedCmd := "dumpsys display | grep -E 'DisplayDeviceInfo|mCurrentOrientation'"
+
+	out, err := m.RunShell(ctx, "sh", "-c", combinedCmd)
 	if err != nil {
 		return ScreenInfo{}, err
 	}
+	output := string(out)
+	println(output)
 
-	densityOut, err := m.RunShell(ctx, "wm", "density")
-	if err != nil {
-		return ScreenInfo{}, fmt.Errorf("wm density: %w", err)
-	}
-	d, err := parseWmDensity(strings.TrimSpace(string(densityOut)))
-	if err != nil {
-		return ScreenInfo{}, err
+	// Parse từ dòng: DisplayDeviceInfo{"Built-in Screen": ..., 720 x 1280, ..., density 320, ...}
+
+	// 1. Parse Size (720 x 1280)
+	sizeRe := regexp.MustCompile(`(\d+)\s+x\s+(\d+)`)
+	sizeMatch := sizeRe.FindStringSubmatch(output)
+	w, h := 0, 0
+	if len(sizeMatch) > 2 {
+		w, _ = strconv.Atoi(sizeMatch[1])
+		h, _ = strconv.Atoi(sizeMatch[2])
 	}
 
-	rotOut, err := m.RunShell(ctx, "sh", "-c", "dumpsys", "SurfaceFlinger")
-	if err != nil {
-		return ScreenInfo{}, fmt.Errorf("dumpsys display: %w", err)
+	// 2. Parse Density (density 320)
+	densityRe := regexp.MustCompile(`density\s+(\d+)`)
+	densMatch := densityRe.FindStringSubmatch(output)
+	d := 0
+	if len(densMatch) > 1 {
+		d, _ = strconv.Atoi(densMatch[1])
 	}
-	orientation := parseOrientation(string(rotOut))
 
-	return ScreenInfo{Width: w, Height: h, Density: d, Orientation: orientation, Rotation: orientation * 90}, nil
+	// 3. Parse Orientation (mCurrentOrientation=1)
+	orientRe := regexp.MustCompile(`mCurrentOrientation=(\d)`)
+	orientMatch := orientRe.FindStringSubmatch(output)
+	orientation := 0
+	if len(orientMatch) > 1 {
+		orientation, _ = strconv.Atoi(orientMatch[1])
+	}
+
+	return ScreenInfo{
+		Width:       w,
+		Height:      h,
+		Density:     DensityInfo{Physical: d, Current: d, Scale: 1.0}, // Đơn giản hóa vì dumpsys trả về current
+		Orientation: orientation,
+		Rotation:    orientation * 90,
+	}, nil
 }
 
 func shellQuote(value string) string {
 	return "'" + strings.ReplaceAll(value, "'", `'\''`) + "'"
 }
 
-// parseWmSize parses `wm size` output. The last "WxH" token wins
-// so an override size takes precedence over the physical size.
+var (
+	sizeRegex    = regexp.MustCompile(`Override size: (\d+)x(\d+)|Physical size: (\d+)x(\d+)`)
+	densityRegex = regexp.MustCompile(`Override density: (\d+)|Physical density: (\d+)`)
+	orientRegex  = regexp.MustCompile(`mCurrentOrientation=(\d)|orientation=(\d)`)
+)
+
 func parseWmSize(output string) (w, h int, err error) {
-	w, h = -1, -1
-	for _, line := range strings.Split(output, "\n") {
-		idx := strings.Index(line, ":")
-		if idx < 0 {
-			continue
-		}
-		sizeStr := strings.TrimSpace(line[idx+1:])
-		parts := strings.SplitN(sizeStr, "x", 2)
-		if len(parts) != 2 {
-			continue
-		}
-
-		pw, e1 := strconv.Atoi(parts[0])
-		ph, e2 := strconv.Atoi(strings.TrimSpace(parts[1]))
-		if e1 == nil && e2 == nil {
-			w, h = pw, ph
-		}
+	matches := sizeRegex.FindAllStringSubmatch(output, -1)
+	if len(matches) == 0 {
+		return 0, 0, errors.New("size not found")
 	}
-	if w < 0 {
-		return 0, 0, fmt.Errorf("could not parse screen size from %q", output)
+	// Lấy match cuối cùng (thường là Override)
+	last := matches[len(matches)-1]
+	if last[1] != "" {
+		w, _ = strconv.Atoi(last[1])
+		h, _ = strconv.Atoi(last[2])
+	} else {
+		w, _ = strconv.Atoi(last[3])
+		h, _ = strconv.Atoi(last[4])
 	}
-
 	return w, h, nil
 }
 
-// parseWmDensity parses `wm density` output. The last numeric value wins
-// so an override density takes precedence over the physical density.
+func parseOrientation(output string) int {
+	match := orientRegex.FindStringSubmatch(output)
+	if len(match) > 0 {
+		// Tìm group nào có dữ liệu (vì regex có toán tử OR)
+		for i := 1; i < len(match); i++ {
+			if match[i] != "" {
+				orient, _ := strconv.Atoi(match[i])
+				return orient
+			}
+		}
+	}
+	return 0
+}
+
 func parseWmDensity(output string) (DensityInfo, error) {
 	var info DensityInfo
-	lines := strings.Split(output, "\n")
 
-	for _, line := range lines {
-		line = strings.ToLower(strings.TrimSpace(line))
-		idx := strings.Index(line, ":")
-		if idx < 0 {
-			continue
-		}
-
-		// Lấy giá trị số sau dấu hai chấm
-		valStr := strings.TrimSpace(line[idx+1:])
-		val, err := strconv.Atoi(valStr)
-		if err != nil {
-			continue
-		}
-
-		// Phân loại dựa trên tiền tố của dòng
-		if strings.Contains(line, "physical") {
-			info.Physical = val
-		} else if strings.Contains(line, "override") {
-			info.Override = val
-		}
+	// 1. Tìm Physical Density (Bắt buộc phải có)
+	physRegex := regexp.MustCompile(`(?i)physical\s+density:\s+(\d+)`)
+	physMatch := physRegex.FindStringSubmatch(output)
+	if len(physMatch) > 1 {
+		info.Physical, _ = strconv.Atoi(physMatch[1])
 	}
 
-	// Kiểm tra tính hợp lệ
 	if info.Physical <= 0 {
-		return info, fmt.Errorf("could not find physical density in output: %q", output)
+		return info, fmt.Errorf("could not find physical density in output")
 	}
 
-	// Logic tính toán Current và Scale
-	if info.Override > 0 {
+	// 2. Tìm Override Density
+	overRegex := regexp.MustCompile(`(?i)override\s+density:\s+(\d+)`)
+	overMatch := overRegex.FindStringSubmatch(output)
+
+	if len(overMatch) > 1 {
+		// Nếu có thiết lập ghi đè
+		info.Override, _ = strconv.Atoi(overMatch[1])
 		info.Current = info.Override
 		info.Scale = float64(info.Override) / float64(info.Physical)
 	} else {
+		// MẶC ĐỊNH: Nếu không có override, gán bằng physical
+		info.Override = info.Physical
 		info.Current = info.Physical
 		info.Scale = 1.0
 	}
 
 	return info, nil
-}
-
-// parseOrientation parses the output of `dumpsys display` to find the current screen orientation.
-func parseOrientation(output string) int {
-	// Regex tìm "orientation=X" hoặc "mCurrentOrientation=X"
-	re := regexp.MustCompile(`orientation=(\d)`)
-	match := re.FindStringSubmatch(output)
-	if len(match) > 1 {
-		orientation, _ := strconv.Atoi(match[1])
-		return orientation
-	}
-	return 0 // Mặc định là 0 nếu không tìm thấy
 }
