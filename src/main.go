@@ -12,14 +12,13 @@ func test() {
 	ctx := context.Background()
 	client := adb.NewManager("./bin/adb")
 	mnc := minicap.New(client, "emulator-5554", "./bin/minicap")
-	fmt.Println("=== Device info demo ===")
-	info, _ := mnc.ScreenInfo(ctx)
-	err := mnc.Screenshot(ctx, "out/test.jpg")
-
+	info, err := mnc.ScreenInfo(ctx)
+	// fmt.Println("=== Device info demo ===")
+	// err := mnc.Screenshot(ctx, "out/test.jpg")
 	if err != nil {
-		fmt.Printf("Screenshot error: %v\n", err)
+		fmt.Printf("Get screen info error: %v\n", err)
+		return
 	}
-
 	b, _ := json.MarshalIndent(info, "", "  ")
 	fmt.Println(string(b))
 

@@ -2,7 +2,6 @@ package adb
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"os/exec"
 	"regexp"
@@ -11,9 +10,9 @@ import (
 )
 
 type DensityInfo struct {
-	Physical int     // Chỉ số DPI gốc của phần cứng
-	Override int     // Chỉ số DPI do người dùng thiết lập (nếu có)
-	Current  int     // Chỉ số đang được áp dụng (Ưu tiên Override)
+	Physical float64 // Chỉ số DPI gốc của phần cứng
+	Override float64 // Chỉ số DPI do người dùng thiết lập (nếu có)
+	Current  float64 // Chỉ số đang được áp dụng (Ưu tiên Override)
 	Scale    float64 // Tỷ lệ thu phóng (Override / Physical)
 }
 
@@ -145,7 +144,7 @@ func (m *SystemManager) DeviceProps(ctx context.Context) (map[string]string, err
 // ScreenSize returns the current display metrics (size and density) for the device.
 func (m *SystemManager) ScreenSize(ctx context.Context) (ScreenInfo, error) {
 	// Lấy thông tin DisplayDeviceInfo (chứa size, density) và Orientation
-	combinedCmd := "dumpsys display | grep -E 'DisplayDeviceInfo|mCurrentOrientation'"
+	combinedCmd := "dumpsys display | grep -E 'mOverrideDisplayInfo|mCurrentOrientation'"
 
 	out, err := m.RunShell(ctx, combinedCmd)
 	if err != nil {
@@ -153,8 +152,6 @@ func (m *SystemManager) ScreenSize(ctx context.Context) (ScreenInfo, error) {
 	}
 	output := string(out)
 	println(output)
-
-	// Parse từ dòng: DisplayDeviceInfo{"Built-in Screen": ..., 720 x 1280, ..., density 320, ...}
 
 	// 1. Parse Size (720 x 1280)
 	sizeRe := regexp.MustCompile(`(\d+)\s+x\s+(\d+)`)
@@ -166,11 +163,13 @@ func (m *SystemManager) ScreenSize(ctx context.Context) (ScreenInfo, error) {
 	}
 
 	// 2. Parse Density (density 320)
-	densityRe := regexp.MustCompile(`density\s+(\d+)`)
+	densityRe := regexp.MustCompile(`density\s+(\d+)\s+\(([\d\.]+)\s+x\s+([\d\.]+)\)`)
 	densMatch := densityRe.FindStringSubmatch(output)
-	d := 0
-	if len(densMatch) > 1 {
-		d, _ = strconv.Atoi(densMatch[1])
+	d := 0.0
+	do := 0.0
+	if len(densMatch) > 2 {
+		do, _ = strconv.ParseFloat(densMatch[1], 64)
+		d, _ = strconv.ParseFloat(densMatch[2], 64)
 	}
 
 	// 3. Parse Orientation (mCurrentOrientation=1)
@@ -184,7 +183,7 @@ func (m *SystemManager) ScreenSize(ctx context.Context) (ScreenInfo, error) {
 	return ScreenInfo{
 		Width:       w,
 		Height:      h,
-		Density:     DensityInfo{Physical: d, Current: d, Scale: 1.0}, // Đơn giản hóa vì dumpsys trả về current
+		Density:     DensityInfo{Physical: d, Current: do, Scale: do / d, Override: do},
 		Orientation: orientation,
 		Rotation:    orientation * 90,
 	}, nil
@@ -192,74 +191,4 @@ func (m *SystemManager) ScreenSize(ctx context.Context) (ScreenInfo, error) {
 
 func shellQuote(value string) string {
 	return "'" + strings.ReplaceAll(value, "'", `'\''`) + "'"
-}
-
-var (
-	sizeRegex    = regexp.MustCompile(`Override size: (\d+)x(\d+)|Physical size: (\d+)x(\d+)`)
-	densityRegex = regexp.MustCompile(`Override density: (\d+)|Physical density: (\d+)`)
-	orientRegex  = regexp.MustCompile(`mCurrentOrientation=(\d)|orientation=(\d)`)
-)
-
-func parseWmSize(output string) (w, h int, err error) {
-	matches := sizeRegex.FindAllStringSubmatch(output, -1)
-	if len(matches) == 0 {
-		return 0, 0, errors.New("size not found")
-	}
-	// Lấy match cuối cùng (thường là Override)
-	last := matches[len(matches)-1]
-	if last[1] != "" {
-		w, _ = strconv.Atoi(last[1])
-		h, _ = strconv.Atoi(last[2])
-	} else {
-		w, _ = strconv.Atoi(last[3])
-		h, _ = strconv.Atoi(last[4])
-	}
-	return w, h, nil
-}
-
-func parseOrientation(output string) int {
-	match := orientRegex.FindStringSubmatch(output)
-	if len(match) > 0 {
-		// Tìm group nào có dữ liệu (vì regex có toán tử OR)
-		for i := 1; i < len(match); i++ {
-			if match[i] != "" {
-				orient, _ := strconv.Atoi(match[i])
-				return orient
-			}
-		}
-	}
-	return 0
-}
-
-func parseWmDensity(output string) (DensityInfo, error) {
-	var info DensityInfo
-
-	// 1. Tìm Physical Density (Bắt buộc phải có)
-	physRegex := regexp.MustCompile(`(?i)physical\s+density:\s+(\d+)`)
-	physMatch := physRegex.FindStringSubmatch(output)
-	if len(physMatch) > 1 {
-		info.Physical, _ = strconv.Atoi(physMatch[1])
-	}
-
-	if info.Physical <= 0 {
-		return info, fmt.Errorf("could not find physical density in output")
-	}
-
-	// 2. Tìm Override Density
-	overRegex := regexp.MustCompile(`(?i)override\s+density:\s+(\d+)`)
-	overMatch := overRegex.FindStringSubmatch(output)
-
-	if len(overMatch) > 1 {
-		// Nếu có thiết lập ghi đè
-		info.Override, _ = strconv.Atoi(overMatch[1])
-		info.Current = info.Override
-		info.Scale = float64(info.Override) / float64(info.Physical)
-	} else {
-		// MẶC ĐỊNH: Nếu không có override, gán bằng physical
-		info.Override = info.Physical
-		info.Current = info.Physical
-		info.Scale = 1.0
-	}
-
-	return info, nil
 }
