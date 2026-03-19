@@ -30,9 +30,10 @@ import (
 const (
 	deviceBin  = "/data/local/tmp/minicap"
 	deviceSO   = "/data/local/tmp/minicap.so"
+	cmd        = "LD_LIBRARY_PATH=/data/local/tmp /data/local/tmp/minicap -n 'ieccorp_minicap'"
 	streamPort = 1717
 	bannerSize = 24
-	maxAPI     = 34
+	maxAPI     = 33
 	minAPI     = 10
 )
 
@@ -57,7 +58,6 @@ type Manager struct {
 	serial  string
 	fetcher *resource.Downloader
 	system  *adb.SystemManager
-	cmd     string
 }
 
 // New creates a Manager for the given device. cacheDir is where downloaded
@@ -69,7 +69,6 @@ func New(adbManager *adb.Manager, serial, cacheDir string) *Manager {
 		serial:  serial,
 		fetcher: resource.NewDownloader(),
 		system:  adb.NewSystemManager(adbManager, serial),
-		cmd:     "LD_LIBRARY_PATH=/data/local/tmp /data/local/tmp/minicap -n 'ieccorp_minicap'",
 	}
 }
 
@@ -142,7 +141,7 @@ func (m *Manager) Screenshot(ctx context.Context, outputPath string) error {
 
 	proj := fmt.Sprintf("%dx%d@%dx%d/0", info.Width, info.Height, info.Width, info.Height)
 	data, err := m.system.RunExecOut(ctx, "sh", "-c",
-		fmt.Sprintf("%s -P %s -s", m.cmd, proj),
+		fmt.Sprintf("%s -P %s -s", cmd, proj),
 	)
 
 	if err != nil {
@@ -165,17 +164,19 @@ func (m *Manager) Screenshot(ctx context.Context, outputPath string) error {
 // frames channel. Streaming runs until ctx is cancelled or an error occurs.
 // The caller must drain the frames channel.
 func (m *Manager) Stream(ctx context.Context, frames chan<- []byte) error {
+	// Ensure binaries are set up on the device.
 	if err := m.Setup(ctx); err != nil {
 		return fmt.Errorf("setup: %w", err)
 	}
 
+	// Check screen size to determine the correct minicap parameters.
 	info, err := m.system.ScreenSize(ctx)
 	if err != nil {
 		return fmt.Errorf("screen size: %w", err)
 	}
 
 	proj := fmt.Sprintf("%dx%d@%dx%d/0", info.Width, info.Height, info.Width, info.Height)
-	shellCmd := fmt.Sprintf("%s -P %s 2>/dev/null", m.cmd, proj)
+	shellCmd := fmt.Sprintf("%s -P %s 2>/dev/null", cmd, proj)
 
 	// Start minicap server on device.
 	serverCmd, err := m.system.ShellCommand(ctx, shellCmd)
@@ -236,6 +237,7 @@ func (m *Manager) Stream(ctx context.Context, frames chan<- []byte) error {
 			return ctx.Err()
 		case frames <- frameData:
 		}
+		fmt.Printf("Received frame: %d bytes\n", len(frameData))
 	}
 }
 
