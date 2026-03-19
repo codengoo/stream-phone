@@ -28,10 +28,11 @@ import (
 )
 
 const (
-	deviceBin  = "/data/local/tmp/minicap"
-	deviceSO   = "/data/local/tmp/minicap.so"
+	folderBin  = "/data/local/tmp/"
+	deviceBin  = folderBin + "minicap"
+	deviceSO   = deviceBin + ".so"
 	socketName = "ieccorp_minicap"
-	cmd        = "LD_LIBRARY_PATH=/data/local/tmp /data/local/tmp/minicap -n '" + socketName + "'"
+	cmd        = "LD_LIBRARY_PATH=" + folderBin + " " + deviceBin + " -n '" + socketName + "'"
 	streamPort = 1717
 	bannerSize = 24
 	maxAPI     = 33
