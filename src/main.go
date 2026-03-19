@@ -4,7 +4,6 @@ import (
 	"automation/src/modules/adb"
 	"automation/src/modules/video/minicap"
 	"context"
-	"encoding/json"
 	"fmt"
 	"log"
 	"os"
@@ -112,27 +111,12 @@ loop:
 
 func test() {
 	ctx := context.Background()
-	// md := adb.NewSystemManager(adb.NewManager("./bin"), "emulator-5554")
-	// // isOk, _ := md.FileExists(ctx, "emulator-5554", "/system/bin/minicap")
-	// info, err := md.ScreenSize(ctx)
-	// if err != nil {
-	// 	fmt.Printf("Error getting screen size: %v\n", err)
-	// 	return
-	// }
-	// fmt.Printf("Screen size: %dx%d density:%d\n", info.Width, info.Height, info.Density)
+	client := adb.NewManager("./bin/adb")
+	mnc := minicap.New(client, "emulator-5554", "./bin/minicap")
+	mnc.Screenshot(ctx, "test.jpg")
 
-	client := adb.NewManager("./bin")
-	clientDv := adb.NewSystemManager(client, "emulator-5554")
-	// info, err := clientDv.ScreenSize(ctx)
-	info, err := clientDv.DeviceProps(ctx)
-	if err != nil {
-		fmt.Printf("Error getting screen size: %v\n", err)
-		return
-	}
-	// fmt.Printf("Device build ID: %s\n", out)
-
-	b, _ := json.MarshalIndent(info, "", "  ")
-	fmt.Println(string(b))
+	// b, _ := json.MarshalIndent(info, "", "  ")
+	// fmt.Println(string(b))
 }
 
 func main() {

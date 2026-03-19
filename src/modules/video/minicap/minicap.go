@@ -31,7 +31,8 @@ const (
 	deviceSO   = "/data/local/tmp/minicap.so"
 	streamPort = 1717
 	bannerSize = 24
-	maxAPI     = 29 // minicap prebuilts are available up to API 29
+	maxAPI     = 34
+	minAPI     = 10
 )
 
 // Banner is the global header sent once by minicap when a streaming client
@@ -50,22 +51,22 @@ type Banner struct {
 
 // Manager wraps an ADB manager and provides minicap operations for a specific device.
 type Manager struct {
-	ADB      *adb.Manager
-	CacheDir string // local directory used to cache downloaded minicap binaries
-	serial   string
-	fetcher  *resource.Downloader
-	system   *adb.SystemManager
+	adb     *adb.Manager
+	BinDir  string
+	serial  string
+	fetcher *resource.Downloader
+	system  *adb.SystemManager
 }
 
 // New creates a Manager for the given device. cacheDir is where downloaded
 // binaries are stored (e.g. "bin/minicap-cache").
 func New(adbManager *adb.Manager, serial, cacheDir string) *Manager {
 	return &Manager{
-		ADB:      adbManager,
-		CacheDir: cacheDir,
-		serial:   serial,
-		fetcher:  resource.NewDownloader(),
-		system:   adb.NewSystemManager(adbManager, serial),
+		adb:     adbManager,
+		BinDir:  cacheDir,
+		serial:  serial,
+		fetcher: resource.NewDownloader(),
+		system:  adb.NewSystemManager(adbManager, serial),
 	}
 }
 
@@ -74,29 +75,25 @@ func New(adbManager *adb.Manager, serial, cacheDir string) *Manager {
 func (m *Manager) Setup(ctx context.Context) error {
 	// Skip push if binaries are already on the device.
 	onDevice, err := m.system.FileExists(ctx, deviceBin)
-	if err != nil {
-		return fmt.Errorf("check minicap on device: %w", err)
-	}
 	if onDevice {
 		return nil
 	}
 
-	api, err := m.system.DeviceProp(ctx, "ro.build.version.sdk")
+	// Gather device info needed to determine which minicap binary to use.
+	props, err := m.system.DeviceProps(ctx)
 	if err != nil {
-		return fmt.Errorf("get api level: %w", err)
+		return fmt.Errorf("get device props: %w", err)
 	}
-
-	abi, err := m.system.DeviceProp(ctx, "ro.product.cpu.abi")
-	if err != nil {
-		return fmt.Errorf("get abi: %w", err)
-	}
+	api := props["ro.build.version.sdk"]
+	abi := props["ro.product.cpu.abi"]
 
 	apiInt, err := strconv.Atoi(api)
 	if err != nil {
 		return fmt.Errorf("parse api level %q: %w", api, err)
 	}
-	if apiInt > maxAPI {
-		apiInt = maxAPI
+
+	if apiInt > maxAPI || apiInt < minAPI {
+		return fmt.Errorf("unsupported api level: %d (must be between %d and %d)", apiInt, minAPI, maxAPI)
 	}
 
 	binLocal, soLocal, err := m.ensureBinaries(ctx, apiInt, abi)
@@ -104,9 +101,11 @@ func (m *Manager) Setup(ctx context.Context) error {
 		return fmt.Errorf("ensure binaries: %w", err)
 	}
 
+	// Push files to device.
 	if err := m.system.PushFile(ctx, binLocal, deviceBin); err != nil {
 		return fmt.Errorf("push minicap: %w", err)
 	}
+
 	if err := m.system.PushFile(ctx, soLocal, deviceSO); err != nil {
 		return fmt.Errorf("push minicap.so: %w", err)
 	}
@@ -252,29 +251,30 @@ func readBanner(r io.Reader) (Banner, error) {
 }
 
 func (m *Manager) ensureBinaries(ctx context.Context, api int, abi string) (binPath, soPath string, err error) {
-	dir := filepath.Join(m.CacheDir, fmt.Sprintf("android-%d", api), abi)
-	binPath = filepath.Join(dir, "minicap")
-	soPath = filepath.Join(dir, "minicap.so")
+	var binName string
+	if api >= 16 {
+		binName = "minicap"
+	} else {
+		binName = "minicap-nopie"
+	}
+	dir := filepath.Join(m.BinDir, "minicap")
+	binPath = filepath.Join(dir, abi, binName)
+	soPath = filepath.Join(dir, "minicap-shared", fmt.Sprintf("android-%d", api), abi, "minicap.so")
 
 	// Return cached files if both exist.
 	if statOK(binPath) && statOK(soPath) {
 		return binPath, soPath, nil
 	}
 
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return "", "", err
-	}
-
-	base := fmt.Sprintf(
-		"https://raw.githubusercontent.com/DeviceFarmer/minicap/master/dist/ndk/android-%d/%s",
-		api, abi,
-	)
-
-	if err := m.fetcher.Download(ctx, base+"/minicap", binPath, resource.DownloadOptions{}); err != nil {
+	downloadUrl := "https://ww-resources.haleinteractive.vn/nghia-dt-test/minicap.zip"
+	downloadPath := filepath.Join(m.BinDir, "minicap.zip")
+	if err := m.fetcher.Download(ctx, downloadUrl, downloadPath, resource.DownloadOptions{ExpectedMD5: nil, Extract: true}); err != nil {
 		return "", "", fmt.Errorf("download minicap binary: %w", err)
 	}
-	if err := m.fetcher.Download(ctx, base+"/minicap.so", soPath, resource.DownloadOptions{}); err != nil {
-		return "", "", fmt.Errorf("download minicap.so: %w", err)
+
+	// Double check that the expected files now exist after extraction.
+	if !statOK(binPath) || !statOK(soPath) {
+		return "", "", fmt.Errorf("minicap binaries not found after download and extract")
 	}
 
 	return binPath, soPath, nil
