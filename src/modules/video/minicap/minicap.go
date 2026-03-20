@@ -76,6 +76,36 @@ func New(adbManager *adb.Manager, serial, cacheDir string) *Manager {
 	}
 }
 
+func (m *Manager) EnsureBinaries(ctx context.Context, api int, abi string) (binPath, soPath string, err error) {
+	var binName string
+	if api >= 16 {
+		binName = "minicap"
+	} else {
+		binName = "minicap-nopie"
+	}
+	dir := filepath.Join(m.BinDir, "minicap")
+	binPath = filepath.Join(dir, abi, binName)
+	soPath = filepath.Join(dir, "minicap-shared", fmt.Sprintf("android-%d", api), abi, "minicap.so")
+
+	// Return cached files if both exist.
+	if statOK(binPath) && statOK(soPath) {
+		return binPath, soPath, nil
+	}
+
+	downloadUrl := "https://ww-resources.haleinteractive.vn/nghia-dt-test/minicap.zip"
+	downloadPath := filepath.Join(m.BinDir, "minicap.zip")
+	if err := m.fetcher.Download(ctx, downloadUrl, downloadPath, resource.DownloadOptions{ExpectedMD5: nil, Extract: true}); err != nil {
+		return "", "", fmt.Errorf("download minicap binary: %w", err)
+	}
+
+	// Double check that the expected files now exist after extraction.
+	if !statOK(binPath) || !statOK(soPath) {
+		return "", "", fmt.Errorf("minicap binaries not found after download and extract")
+	}
+
+	return binPath, soPath, nil
+}
+
 // Setup downloads the minicap binary and shared library for the device,
 // then pushes them onto the device if they are not already present.
 func (m *Manager) Setup(ctx context.Context) error {
@@ -106,7 +136,7 @@ func (m *Manager) Setup(ctx context.Context) error {
 		return fmt.Errorf("unsupported api level: %d (must be between %d and %d)", apiInt, minAPI, maxAPI)
 	}
 
-	binLocal, soLocal, err := m.ensureBinaries(ctx, apiInt, abi)
+	binLocal, soLocal, err := m.EnsureBinaries(ctx, apiInt, abi)
 	if err != nil {
 		return fmt.Errorf("ensure binaries: %w", err)
 	}
@@ -281,36 +311,6 @@ func readBanner(r io.Reader) (Banner, error) {
 		Orientation:   buf[22],
 		Quirks:        buf[23],
 	}, nil
-}
-
-func (m *Manager) ensureBinaries(ctx context.Context, api int, abi string) (binPath, soPath string, err error) {
-	var binName string
-	if api >= 16 {
-		binName = "minicap"
-	} else {
-		binName = "minicap-nopie"
-	}
-	dir := filepath.Join(m.BinDir, "minicap")
-	binPath = filepath.Join(dir, abi, binName)
-	soPath = filepath.Join(dir, "minicap-shared", fmt.Sprintf("android-%d", api), abi, "minicap.so")
-
-	// Return cached files if both exist.
-	if statOK(binPath) && statOK(soPath) {
-		return binPath, soPath, nil
-	}
-
-	downloadUrl := "https://ww-resources.haleinteractive.vn/nghia-dt-test/minicap.zip"
-	downloadPath := filepath.Join(m.BinDir, "minicap.zip")
-	if err := m.fetcher.Download(ctx, downloadUrl, downloadPath, resource.DownloadOptions{ExpectedMD5: nil, Extract: true}); err != nil {
-		return "", "", fmt.Errorf("download minicap binary: %w", err)
-	}
-
-	// Double check that the expected files now exist after extraction.
-	if !statOK(binPath) || !statOK(soPath) {
-		return "", "", fmt.Errorf("minicap binaries not found after download and extract")
-	}
-
-	return binPath, soPath, nil
 }
 
 func statOK(path string) bool {

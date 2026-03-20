@@ -163,8 +163,6 @@ func (m *SystemManager) ScreenSize(ctx context.Context) (ScreenInfo, error) {
 		return ScreenInfo{}, err
 	}
 	output := string(out)
-	println(output)
-
 	// 1. Parse Size (720 x 1280)
 	sizeRe := regexp.MustCompile(`(\d+)\s+x\s+(\d+)`)
 	sizeMatch := sizeRe.FindStringSubmatch(output)

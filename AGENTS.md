@@ -35,3 +35,11 @@
 ## Default Decision Rule
 
 - When uncertain, choose the design that produces smaller modules and simpler Windows-only behavior.
+
+## Documentation Sync
+
+- `docs/api.md` is the single source of truth for the HTTP API.
+- **Every change to an HTTP endpoint** (new route, removed route, changed path, changed query params, changed request or response shape) **must include a matching update to `docs/api.md` in the same commit.**
+- Endpoint changes without a corresponding `docs/api.md` update must be rejected in code review.
+- When adding a new capture backend, also update the `?type` table in `docs/api.md`.
+- When adding new documentation files, register them in `docs/project.md`.
