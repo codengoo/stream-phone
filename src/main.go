@@ -2,7 +2,7 @@ package main
 
 import (
 	"automation/src/modules/adb"
-	"automation/src/modules/video/screencap"
+	"automation/src/modules/video/adbcap"
 	"context"
 )
 
@@ -20,7 +20,7 @@ func test() {
 	// b, _ := json.MarshalIndent(info, "", "  ")
 	// fmt.Println(string(b))
 
-	sc := screencap.New(client, "emulator-5554")
+	sc := adbcap.New(client, "emulator-5554")
 	sc.Screenshot(ctx, "out/test.png")
 
 	// 	fmt.Println("\n=== Stream demo (10 frames) ===")

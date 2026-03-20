@@ -8,7 +8,7 @@
 //     exec-out, forwarding the raw H.264 bitstream as byte chunks to the
 //     caller. screenrecord has a built-in 3-minute limit; the stream server's
 //     restart loop handles reconnection transparently.
-package screencap
+package adbcap
 
 import (
 	"bytes"
